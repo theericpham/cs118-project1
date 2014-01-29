@@ -1,0 +1,29 @@
+Need:
+
+create_sever_socket_thingy()  -->  file descriptor  [Eric]
+	Fill out a addr_info struct
+	Open socket
+	Bind to constant port number and our IP
+listen(file descriptor) [Caleb with a C]
+	Loop forever until program quits:
+		Fork for each incoming connection, up to 20 at once
+		Call handle_connection(client address)
+handle_connection(client address)
+	Parse http request from client --> server address, requested file
+	If invalid, return 4xx error
+	Open socket and establish connection with server
+	Read from server into temp buffer
+	While temp buffer still has stuff:
+		Write it to client socket
+	Repeat until client disconnects (or now if 1.0)
+
+Eric's Notes:
+
+getaddrinfo(const char *node, const char *service, cont struct addrinfo *hints, struct addrinfo *res)
+  returns a linked list of addrinfo structs (res -- results) which contains an address which can be used in bind/connect
+  addrinfo hints points to an addrinfo struct which specifies criteria for selecting addrinfo results
+    if hints->ai_flags == AI_PASSIVE
+      if node == NULL then the returned results will be suitable for binding a socket that will accept connections
+    else
+      the returned results will be suitable for connecting/sending
+  char service sets the port in each returned addrinfo
