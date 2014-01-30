@@ -23,8 +23,15 @@ int main (int argc, char *argv[])
   
   // create a socket
   int sockfd;
-  sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)
-  
+  if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol) == -1)
+    fprintf(stedrr, "socket error: %s\n", gai_strerr(status));
+	
+  //Now bind the socket to the address we got for ourselves earlier
+  if (bind(sockfd, res->ai_addr, res->ai_addrlen) == -1)
+    fprintf(stedrr, "bind error: %s\n", gai_strerr(status));
+
+  //And finally start listening for connections
+  if ((
   
   return 0;
 }
