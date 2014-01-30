@@ -1,7 +1,8 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+1;2c/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 
 #include <iostream>
-
+#include <sys/socket.h>
+#include <sys/types.h>
 using namespace std;
 
 const char* PORT_PROXY_LISTEN = "14866";
