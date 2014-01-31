@@ -1,13 +1,16 @@
-Need:
+DONE:
 
-create_sever_socket_thingy()  -->  file descriptor  [Eric]
+create_sever_socket_thingy()  -->  file descriptor
 	Fill out a addr_info struct
 	Open socket
 	Bind to constant port number and our IP
-listen(file descriptor) [Caleb with a C]
+listen loop (in main)
 	Loop forever until program quits:
 		Fork for each incoming connection, up to 20 at once
 		Call handle_connection(client address)
+
+TODO:
+
 handle_connection(client address)
 	Parse http request from client --> server address, requested file
 	If invalid, return 4xx error
@@ -15,7 +18,7 @@ handle_connection(client address)
 	Read from server into temp buffer
 	While temp buffer still has stuff:
 		Write it to client socket
-	Repeat until client disconnects (or now if 1.0)
+	Repeat until client disconnects (or if 1.0 just close)
 
 Eric's Notes:
 
