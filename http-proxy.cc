@@ -8,10 +8,12 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <cstring>
+#include <string>
 #include "http-request.h"
 using namespace std;
 
-const char* PORT_PROXY_LISTEN = "14866";
+const char* PORT_PROXY_LISTEN = "14886";
 const int BUFSIZE = 1024;
 const int BACKLOG = 20;
 #define CHECK(F) if ( (F) == -1 ) cerr << "Error when calling " << #F << endl;
@@ -19,10 +21,12 @@ const int BACKLOG = 20;
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
 #define NOFLAGS 0
 
+
+/* 
+ * This function returns a file descriptor that points to a new socket bound to 
+ * localhost:PORT_PROXY_LISTEN. It will be ready to listen for and accept TCP connections. 
+ */
 int createListenSocket() {
-	/* This function returns a file descriptor that points to a new socket bound to 
-	localhost:PORT_PROXY_LISTEN. It will be ready to listen for and accept TCP connections. */
-	
   // generate addresses which can bind to a socket for client requests
   struct addrinfo hints, *res;
   memset(&hints, 0, sizeof hints); // clear struct
@@ -38,27 +42,31 @@ int createListenSocket() {
   // create a socket
   int sockfd;
   CHECK(sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol))
-  //Now bind the socket to the address we got for ourselves earlier
+    
+  // bind the socket to the address we got for ourselves earlier
   CHECK(bind(sockfd, res->ai_addr, res->ai_addrlen))
+    
+  freeaddrinfo(res);
   return sockfd;
 }
 
 int createRemoteSocket(string host, short port) {
-	struct addrinfo hints, *server_addr;
-	memset(&hints, 0, sizeof hints); // clear struct
-	hints.ai_family   = AF_INET;     // handle IPv4
-	hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
-	int status;
-	if ( (status = getaddrinfo(host.c_str(), to_string(port).c_str(), &hints, &server_addr)) != 0 )
-		ERROR("Invalid remote server %s:%d", host.c_str(), port);
-	
-	//Get a file descriptor that we can use to write to the server
-	int server_fd;
-	CHECK(server_fd = socket(server_addr->ai_family, server_addr->ai_socktype, server_addr->ai_protocol))
-	//Now establish a connection with the server at the port the client asked for.
-	CHECK(connect(server_fd, server_addr->ai_addr, server_addr->ai_addrlen))
-	//We've connected the socket to the remote address. Now it's ready to talk to.
-	return server_fd;
+  // struct addrinfo hints, *server_addr;
+  // memset(&hints, 0, sizeof hints); // clear struct
+  // hints.ai_family   = AF_INET;     // handle IPv4
+  // hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
+  // int status;
+  // if ( (status = getaddrinfo(host.c_str(), to_string(port).c_str(), &hints, &server_addr)) != 0 )
+  //   ERROR("Invalid remote server %s:%d", host.c_str(), port);
+  // 
+  // //Get a file descriptor that we can use to write to the server
+  // int server_fd;
+  // CHECK(server_fd = socket(server_addr->ai_family, server_addr->ai_socktype, server_addr->ai_protocol))
+  // //Now establish a connection with the server at the port the client asked for.
+  // CHECK(connect(server_fd, server_addr->ai_addr, server_addr->ai_addrlen))
+  // //We've connected the socket to the remote address. Now it's ready to talk to.
+  // return server_fd;
+  return -1;
 }
 
 void tellClientUnsupportedMethod(int client_fd) {
@@ -97,10 +105,13 @@ void deliverPage(int client_fd) {
 }
 
 int main (int argc, char *argv[]) {
+  // create listen socket
 	int sockfd = createListenSocket();
-  //First start listening for connections
+  
+  // first start listening for connections
   CHECK(listen(sockfd, BACKLOG))
-  //Now loop forever, accepting a connection and forking a new process to deal with it
+    
+  // now loop forever, accepting a connection and forking a new process to deal with it
   struct sockaddr client_addr;
   int client_fd;
   socklen_t sizevar;
