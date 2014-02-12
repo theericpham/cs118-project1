@@ -22,13 +22,49 @@ const int BACKLOG = 20;
 #define NOFLAGS 0
 
 int processClient(int clientfd) {
-  HttpRequest req;
-  
-  try {
-  
-  } catch (ParseException e) {
-    
+  // FUTURE NOTE: for persistent connections we may want to wrap in a loop
+  // read request from client
+  string tmp_req;
+  char buf[BUFSIZE];
+  int len;
+  while(memmem(tmp_req.c_str(), tmp_req.length(), "/r/n/r/n", 4) == NULL) {
+    cerr << "Looking for carriage return ... " << endl;
+    memset(&buf, 0, sizeof buf);
+    len = read(clientfd, buf, sizeof buf);
+    if (len > 0) {
+      tmp_req.append(buf);
+      cerr << "Read " << len << " bytes" << endl;
+    } 
+    else {
+      cerr << "Didn't read anything" << endl;
+      break;
+    }
+    cerr << "TEMP: " << tmp_req << endl;
   }
+  
+  // parse the client's request
+  HttpRequest req;  
+  try {
+    req.ParseRequest(tmp_req.c_str(), tmp_req.length());
+    
+    // open connection with remote server
+    
+  } catch (ParseException e) {
+    cerr << e.what() << endl;
+    string response;
+    string get_err = "Request is not GET";
+    
+    // 
+    if (strcmp(e.what(), get_err.c_str()) == 0)
+      response = "501 Not Implemented\r\n\r\n";
+    else
+      response = "400 Bad Request\r\n\r\n";
+    
+    write(clientfd, response.c_str(), response.length());
+  }
+  
+  cerr << "All done here" << endl;
+  close(clientfd);
   return -1;
 }
 
@@ -38,7 +74,7 @@ int processClient(int clientfd) {
  */
 int createListenSocket() {
   // generate addresses which can bind to a socket for client requests
-  struct addrinfo hints, *res;
+  struct addrinfo hints, *res, *p;
   memset(&hints, 0, sizeof hints); // clear struct
   hints.ai_family   = AF_INET;     // handle IPv4
   hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
@@ -49,15 +85,15 @@ int createListenSocket() {
     ERROR("getaddrinfo error: %s\n", gai_strerror(status))
 
   // res now points to a linked list of struct addrinfos, probably just 1 in this case
-  // create a socket
+  // create a socket and bind to a valid address
   int sockfd;
   int yes = 1;
-  CHECK(sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol))
-  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    
-  // bind the socket to the address we got for ourselves earlier
-  CHECK(bind(sockfd, res->ai_addr, res->ai_addrlen))
-    
+  for (p = res; p != NULL; p = p->ai_next) {
+    CHECK(sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol));  // create socket
+    CHECK(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)));      // allow port reuse
+    CHECK(bind(sockfd, res->ai_addr, res->ai_addrlen));                          // bind
+  }
+        
   freeaddrinfo(res);
   return sockfd;
 }
@@ -124,21 +160,32 @@ int main (int argc, char *argv[]) {
   CHECK(listen(sockfd, BACKLOG))
     
   // now loop forever, accepting a connection and forking a new process to deal with it
-  struct sockaddr client_addr;
-  int client_fd;
-  socklen_t sizevar;
   for (;;) {
-  	sizevar = (socklen_t)sizeof client_addr;
+    // setup client addr info
+    struct sockaddr client_addr;
+    memset(&client_addr, 0, sizeof client_addr);
+    socklen_t sizevar = (socklen_t) sizeof client_addr;
+    int client_fd;
+    
+    // accept client connection
   	CHECK_CONTINUE(client_fd = accept(sockfd, &client_addr, &sizevar))
-  	if ( fork() ) //in parent
-  		close(client_fd); //don't need child's connection
+      
+    // what if fork fails?
+    if ( fork() ) //in parent 
+      // need to track how many children have been forked
+      close(client_fd); //don't need child's connection
   	else {
-  		close(sockfd); //don't need parent's connection
-  		CHECK(send(client_fd, "Why hello there!", 16, 0))
-  		deliverPage(client_fd);
-  		close(client_fd); //Done with client
+      // close(sockfd); //don't need parent's connection
+      // CHECK(send(client_fd, "Why hello there!", 16, 0))
+      // deliverPage(client_fd);
+      processClient(client_fd);
+      close(client_fd); //Done with client
   		exit(0);
-  		}
   	}
+      
+    // if max # of processes have been forked
+    // then we should wait for any process to 
+    // finish before continuing
+  }
   return 0;
 }
