@@ -21,6 +21,16 @@ const int BACKLOG = 20;
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
 #define NOFLAGS 0
 
+int processClient(int clientfd) {
+  HttpRequest req;
+  
+  try {
+  
+  } catch (ParseException e) {
+    
+  }
+  return -1;
+}
 
 /* 
  * This function returns a file descriptor that points to a new socket bound to 
@@ -41,7 +51,9 @@ int createListenSocket() {
   // res now points to a linked list of struct addrinfos, probably just 1 in this case
   // create a socket
   int sockfd;
+  int yes = 1;
   CHECK(sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol))
+  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
     
   // bind the socket to the address we got for ourselves earlier
   CHECK(bind(sockfd, res->ai_addr, res->ai_addrlen))
