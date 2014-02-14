@@ -21,7 +21,27 @@ const int BACKLOG = 20;
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
 #define NOFLAGS 0
 
-int processClient(int clientfd) {
+
+int createRemoteSocket(string host, short port) {
+	cerr << "Connecting to " << host << ":" << port << endl;
+	struct addrinfo hints, *server_addr;
+	memset(&hints, 0, sizeof hints); // clear struct
+	hints.ai_family   = AF_INET;     // handle IPv4
+	hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
+	int status;
+	if ( (status = getaddrinfo(host.c_str(), to_string(port).c_str(), &hints, &server_addr)) != 0 )
+	  ERROR("Invalid remote server %s:%d", host.c_str(), port);
+
+	//Get a file descriptor that we can use to write to the server
+	int server_fd;
+	CHECK(server_fd = socket(server_addr->ai_family, server_addr->ai_socktype, server_addr->ai_protocol))
+	//Now establish a connection with the server at the port the client asked for.
+	CHECK(connect(server_fd, server_addr->ai_addr, server_addr->ai_addrlen))
+	//We've connected the socket to the remote address. Now it's ready to talk to.
+	return server_fd;
+}
+
+int processClient(int client_fd) {
   // FUTURE NOTE: for persistent connections we may want to wrap in a loop
   // read request from client
   string tmp_req;
@@ -30,7 +50,7 @@ int processClient(int clientfd) {
   while(memmem(tmp_req.c_str(), tmp_req.length(), "\r\n\r\n", 4) == NULL) {
     cerr << "Looking for carriage return ... " << endl;
     memset(&buf, 0, sizeof buf);
-    len = read(clientfd, buf, sizeof buf);
+    len = read(client_fd, buf, sizeof buf);
     if (len > 0) {
       tmp_req.append(buf);
       cerr << "Read " << len << " bytes" << endl;
@@ -43,9 +63,9 @@ int processClient(int clientfd) {
   }
   
   // parse the client's request
-  HttpRequest req;  
+  HttpRequest client_request;  
   try {
-    req.ParseRequest(tmp_req.c_str(), tmp_req.length());
+    client_request.ParseRequest(tmp_req.c_str(), tmp_req.length());
     
     // open connection with remote server
     
@@ -60,11 +80,29 @@ int processClient(int clientfd) {
     else
       response = "400 Bad Request\r\n\r\n";
     
-    write(clientfd, response.c_str(), response.length());
+    write(client_fd, response.c_str(), response.length());
   }
+
+	//Connect to the remote server that the client requested and return the file descriptor
+  int server_fd = createRemoteSocket(client_request.GetHost(), client_request.GetPort());
+  
+ //Now we can forward the client's request to the server.
+ //First re-format the request to a string
+ char send_buffer[BUFSIZE];
+ char* send_buffer_end = client_request.FormatRequest(send_buffer);
+ int send_buffer_length = send_buffer_end - send_buffer;
+ //Then send the request to the server 
+ CHECK(send(server_fd, send_buffer, send_buffer_length, NOFLAGS))
+
+	char response_buffer[BUFSIZE];
+	int response_length;
+	CHECK(response_length = recv(server_fd, response_buffer, sizeof response_buffer, NOFLAGS))
+
+	//Now send it to the client
+	CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
   
   cerr << "All done here" << endl;
-  close(clientfd);
+  close(client_fd);
   return -1;
 }
 
@@ -96,25 +134,6 @@ int createListenSocket() {
         
   freeaddrinfo(res);
   return sockfd;
-}
-
-int createRemoteSocket(string host, short port) {
-  // struct addrinfo hints, *server_addr;
-  // memset(&hints, 0, sizeof hints); // clear struct
-  // hints.ai_family   = AF_INET;     // handle IPv4
-  // hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
-  // int status;
-  // if ( (status = getaddrinfo(host.c_str(), to_string(port).c_str(), &hints, &server_addr)) != 0 )
-  //   ERROR("Invalid remote server %s:%d", host.c_str(), port);
-  // 
-  // //Get a file descriptor that we can use to write to the server
-  // int server_fd;
-  // CHECK(server_fd = socket(server_addr->ai_family, server_addr->ai_socktype, server_addr->ai_protocol))
-  // //Now establish a connection with the server at the port the client asked for.
-  // CHECK(connect(server_fd, server_addr->ai_addr, server_addr->ai_addrlen))
-  // //We've connected the socket to the remote address. Now it's ready to talk to.
-  // return server_fd;
-  return -1;
 }
 
 void tellClientUnsupportedMethod(int client_fd) {
