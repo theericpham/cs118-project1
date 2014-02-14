@@ -27,7 +27,7 @@ int processClient(int clientfd) {
   string tmp_req;
   char buf[BUFSIZE];
   int len;
-  while(memmem(tmp_req.c_str(), tmp_req.length(), "/r/n/r/n", 4) == NULL) {
+  while(memmem(tmp_req.c_str(), tmp_req.length(), "\r\n\r\n", 4) == NULL) {
     cerr << "Looking for carriage return ... " << endl;
     memset(&buf, 0, sizeof buf);
     len = read(clientfd, buf, sizeof buf);
