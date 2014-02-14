@@ -95,12 +95,23 @@ int processClient(int client_fd) {
  //Then send the request to the server 
  CHECK(send(server_fd, send_buffer, send_buffer_length, NOFLAGS))
 
-	char response_buffer[BUFSIZE];
-	int response_length;
-	CHECK(response_length = recv(server_fd, response_buffer, sizeof response_buffer, NOFLAGS))
+  // char response_buffer[BUFSIZE];
+  // int response_length;
+  // CHECK(response_length = recv(server_fd, response_buffer, sizeof response_buffer, NOFLAGS))
+    
+  // FUTURE NOTE: our connection to the remote server is HTTP/1.1
+  //              so we should have a timer to close the connection
+  // read server response
+  string server_response;
+  do {
+    memset(&buf, 0, sizeof buf);
+    len = read(server_fd, buf, sizeof buf);
+    server_response.append(buf);
+  } while (len > 0);
 
 	//Now send it to the client
-	CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
+  // CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
+  write(client_fd, server_response.c_str(), server_response.length());
   
   cerr << "All done here" << endl;
   close(client_fd);
