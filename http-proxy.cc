@@ -13,7 +13,8 @@
 #include "http-request.h"
 using namespace std;
 
-const char* PORT_PROXY_LISTEN = "14886";
+const char* PORT_PROXY_LISTEN   = "14886";
+const short PORT_SERVER_DEFAULT = 80;
 const int BUFSIZE = 1024;
 const int BACKLOG = 20;
 #define CHECK(F) if ( (F) == -1 ) cerr << "Error when calling " << #F << endl;
@@ -48,33 +49,23 @@ int processClient(int client_fd) {
   char buf[BUFSIZE];
   int len;
   while(memmem(tmp_req.c_str(), tmp_req.length(), "\r\n\r\n", 4) == NULL) {
-    cerr << "Looking for carriage return ... " << endl;
     memset(&buf, 0, sizeof buf);
     len = read(client_fd, buf, sizeof buf);
-    if (len > 0) {
-      tmp_req.append(buf);
-      cerr << "Read " << len << " bytes" << endl;
-    } 
-    else {
-      cerr << "Didn't read anything" << endl;
+    if (len > 0) 
+      tmp_req.append(buf); 
+    else 
       break;
-    }
-    cerr << "TEMP: " << tmp_req << endl;
   }
   
   // parse the client's request
   HttpRequest client_request;  
   try {
     client_request.ParseRequest(tmp_req.c_str(), tmp_req.length());
-    
-    // open connection with remote server
-    
   } catch (ParseException e) {
     cerr << e.what() << endl;
     string response;
     string get_err = "Request is not GET";
     
-    // 
     if (strcmp(e.what(), get_err.c_str()) == 0)
       response = "501 Not Implemented\r\n\r\n";
     else
@@ -82,9 +73,19 @@ int processClient(int client_fd) {
     
     write(client_fd, response.c_str(), response.length());
   }
+  
+  // set the host and port properly
+  string host = client_request.GetHost();
+  short  port = client_request.GetPort();
+  if (host.length() == 0) 
+    host = client_request.FindHeader("Host");
+  if (!port)
+    port = PORT_SERVER_DEFAULT;
+  // cerr << endl << "Client wants to connect to " << host << " on port " << port << endl;
+  // cerr << "The path is " << client_request.GetPath() << endl;
 
 	//Connect to the remote server that the client requested and return the file descriptor
-  int server_fd = createRemoteSocket(client_request.GetHost(), client_request.GetPort());
+  int server_fd = createRemoteSocket(host, port);
   
  //Now we can forward the client's request to the server.
  //First re-format the request to a string
