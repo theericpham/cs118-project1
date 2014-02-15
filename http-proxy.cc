@@ -11,12 +11,15 @@
 #include <cstring>
 #include <string>
 #include "http-request.h"
+#include "http-response.h"
 using namespace std;
 
 const char* PORT_PROXY_LISTEN   = "14886";
 const short PORT_SERVER_DEFAULT = 80;
-const int BUFSIZE = 1024;
-const int BACKLOG = 20;
+const char* NON_PERSISTENT      = "1.0";
+const char* PERSISTENT          = "1.1";
+const int BUFSIZE               = 1024;
+const int BACKLOG               = 20;
 #define CHECK(F) if ( (F) == -1 ) cerr << "Error when calling " << #F << endl;
 #define CHECK_CONTINUE(F) if ( (F) == -1 ) { cerr << "Error when calling " << #F << endl; continue; }
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
@@ -64,15 +67,28 @@ int processClient(int client_fd) {
     client_request.ParseRequest(tmp_req.c_str(), tmp_req.length());
   } catch (ParseException e) {
     cerr << e.what() << endl;
-    string response;
+    
+    HttpResponse err_response;
+    err_response.SetVersion(PERSISTENT);
+    string err_msg;
+    string err_code;
     string get_err = "Request is not GET";
     
-    if (strcmp(e.what(), get_err.c_str()) == 0)
-      response = "501 Not Implemented\r\n\r\n";
-    else
-      response = "400 Bad Request\r\n\r\n";
+    if (strcmp(e.what(), get_err.c_str()) == 0) {
+      err_code = "501";
+      err_msg  = "Not Implemented";
+    }
+    else {
+      err_code = "400";
+      err_msg  = "Bad Request";
+    }
+    err_response.SetStatusCode(err_code);
+    err_response.SetStatusMsg(err_msg);
     
-    write(client_fd, response.c_str(), response.length());
+    char err_buf[err_response.GetTotalLength()];
+    err_response.FormatResponse(err_buf);
+    
+    write(client_fd, err_buf, err_response.GetTotalLength());
   }
   
   // set the host and port properly
@@ -108,8 +124,10 @@ int processClient(int client_fd) {
   do {
     memset(&buf, 0, sizeof buf);
     len = read(server_fd, buf, sizeof buf);
+    cerr << "The server returned " << len << "bytes: " << endl << buf << endl;
     server_response.append(buf);
   } while (len > 0);
+  close(server_fd);
   cerr << "Server Responded: " << endl << server_response << endl;
 
 	//Now send it to the client
