@@ -56,6 +56,7 @@ int processClient(int client_fd) {
     else 
       break;
   }
+  cerr << "Client Request: " << endl << tmp_req << endl;
   
   // parse the client's request
   HttpRequest client_request;  
@@ -81,8 +82,8 @@ int processClient(int client_fd) {
     host = client_request.FindHeader("Host");
   if (!port)
     port = PORT_SERVER_DEFAULT;
-  // cerr << endl << "Client wants to connect to " << host << " on port " << port << endl;
-  // cerr << "The path is " << client_request.GetPath() << endl;
+  cerr << endl << "Client wants to connect to " << host << " on port " << port << endl;
+  cerr << "The path is " << client_request.GetPath() << endl;
 
 	//Connect to the remote server that the client requested and return the file descriptor
   int server_fd = createRemoteSocket(host, port);
@@ -94,6 +95,7 @@ int processClient(int client_fd) {
  int send_buffer_length = send_buffer_end - send_buffer;
  //Then send the request to the server 
  CHECK(send(server_fd, send_buffer, send_buffer_length, NOFLAGS))
+   cerr << "Sent Request to Server:" << endl << send_buffer << endl;
 
   // char response_buffer[BUFSIZE];
   // int response_length;
@@ -108,6 +110,7 @@ int processClient(int client_fd) {
     len = read(server_fd, buf, sizeof buf);
     server_response.append(buf);
   } while (len > 0);
+  cerr << "Server Responded: " << endl << server_response << endl;
 
 	//Now send it to the client
   // CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
@@ -148,41 +151,6 @@ int createListenSocket() {
   return sockfd;
 }
 
-void tellClientUnsupportedMethod(int client_fd) {
-	// A simple helper function to tell the client that they asked for an unsupported method.
-	//TODO: fill in this function with an actual http response with the error code
-	ERROR("Unsupported method");
-}
-
-void deliverPage(int client_fd) {
-	/* This function simply parses the client's request for a server and web page request,
-	then fetches it from the remote server and delivers it to the client.
-	Input: client socket file descriptor */
-	//First read the request from the client
-	char read_buffer[BUFSIZE];
-	int request_length;
-	CHECK(request_length = recv(client_fd, read_buffer, sizeof read_buffer, NOFLAGS))
-	//Put the client's request into an HttpRequest object to parse it
-	HttpRequest client_request;
-	client_request.ParseRequest(read_buffer, request_length);
-	//Do some simple evaluation. If the method is unsupported, call a function to tell the client
-	if ( client_request.GetMethod() == HttpRequest::UNSUPPORTED )
-		tellClientUnsupportedMethod(client_fd);
-	//If the request is totally valid, find out what server we need to talk to.
-	int server_fd = createRemoteSocket(client_request.GetHost(), client_request.GetPort());
-	//Request the page from the server, storing it somewhere temporarily
-		//Can we just send the contents of read_buffer to the server, since that's the request?
-		//TODO: If so, change the name of read_buffer to request_buffer
-	CHECK(send(server_fd, read_buffer, request_length, NOFLAGS))
-	//Fetch the page from the server into a temporary buffer
-	char response_buffer[BUFSIZE];
-	int response_length;
-	CHECK(response_length = recv(server_fd, response_buffer, sizeof response_buffer, NOFLAGS))
-	//Now send it to the client
-	CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
-	//We're done. Don't close the connection; let the main loop decide if that should be done.
-}
-
 int main (int argc, char *argv[]) {
   // create listen socket
 	int sockfd = createListenSocket();
@@ -202,15 +170,12 @@ int main (int argc, char *argv[]) {
   	CHECK_CONTINUE(client_fd = accept(sockfd, &client_addr, &sizevar))
       
     // what if fork fails?
-    if ( fork() ) //in parent 
-      // need to track how many children have been forked
-      close(client_fd); //don't need child's connection
+    if ( fork() ) {
+      cerr << "I'm the parent" << endl;
+    }
   	else {
-      // close(sockfd); //don't need parent's connection
-      // CHECK(send(client_fd, "Why hello there!", 16, 0))
-      // deliverPage(client_fd);
+      cerr << "I'm a child" << endl;
       processClient(client_fd);
-      close(client_fd); //Done with client
   		exit(0);
   	}
       
