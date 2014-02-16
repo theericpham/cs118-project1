@@ -55,6 +55,7 @@ int createRemoteSocket(string host, short port) {
 int processClient(int client_fd) {
   cerr << "Processing Client" << endl;
 
+  // receive client request
   string request, response;
   char client_request_buffer[BUFSIZE + 1];
   int len;
@@ -63,8 +64,7 @@ int processClient(int client_fd) {
     len = read(client_fd, client_request_buffer, sizeof client_request_buffer);
     request.append(client_request_buffer);
   } while ((len > 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
-  // cerr << "Client Request: " << endl << tmp_req << endl;
-  cerr << "Finished Reading Client Request: " << endl << request << endl;
+  cerr << "Finished Reading Client Request:" << endl << request << endl;
   
   // parse client request
   HttpRequest client_request;
@@ -89,9 +89,11 @@ int processClient(int client_fd) {
     error_response.FormatResponse(response_buffer);
     write(client_fd, response_buffer, len);
     close(client_fd);
+    shutdown(client_fd, 2);  // disallow further sends and receives
     cerr << "Returned Error Response to Client and Closing Connection" << endl;
   }
-  
+    
+  // format proxy request to send to remote server
   char proxy_request_buffer[client_request.GetTotalLength() + 1];
   client_request.FormatRequest(proxy_request_buffer);
   cerr << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
@@ -102,14 +104,31 @@ int processClient(int client_fd) {
   
   string remote_server_host;
   short  remote_server_port;
-  remote_server_host = (client_request.GetHost().length() == 0) ? client_request.GetHost() : client_request.FindHeader("Host");
-  remote_server_port = (!client_request.GetPort()) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
+  remote_server_host = (client_request.GetHost().length() != 0) ? client_request.GetHost() : client_request.FindHeader("Host");
+  remote_server_port = (client_request.GetPort() > 0) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
   
   cerr << "Client Wants to Connect to Remote Server Host " << remote_server_host << " on port " << remote_server_port << endl;
-  // 
-  // //Connect to the remote server that the client requested and return the file descriptor
-  //   int server_fd = createRemoteSocket(host, port);
-  //   CHECK(send(server_fd, proxy_request, client_request.GetTotalLength(), NOFLAGS))
+  
+  // connect to remote server and return file descriptor
+  int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
+  
+  // foward client request to remote server
+  len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength() + 1);
+  cerr << "Proxy Sent " << len << " Byte Request To Remote Server." << endl;
+  
+  // receive server response
+  HttpResponse server_response;
+  char server_response_buffer[BUFSIZE + 1];
+  do {
+    memset(&server_response_buffer, 0, sizeof server_response_buffer);
+    len = read(server_fd, server_response_buffer, sizeof server_response_buffer);
+    response.append(server_response_buffer);
+  } while ((len > 0) && (memmem(response.c_str(), response.length(), "\r\n\r\n", 4) == NULL));
+  
+  cerr << "Finished Reading Server Response:" << endl << response << endl;
+  
+  close(server_fd);
+
   
  //Now we can forward the client's request to the server.
  //First re-format the request to a string
