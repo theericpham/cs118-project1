@@ -51,9 +51,11 @@ int processClient(int client_fd) {
   string tmp_req;
   char buf[BUFSIZE];
   int len;
+  long request_length = 0;
   while(memmem(tmp_req.c_str(), tmp_req.length(), "\r\n\r\n", 4) == NULL) {
     memset(&buf, 0, sizeof buf);
     len = read(client_fd, buf, sizeof buf);
+    request_length += len;
     if (len > 0) 
       tmp_req.append(buf); 
     else 
@@ -89,6 +91,7 @@ int processClient(int client_fd) {
     err_response.FormatResponse(err_buf);
     
     write(client_fd, err_buf, err_response.GetTotalLength());
+    close(client_fd);
   }
   
   // set the host and port properly
@@ -106,37 +109,66 @@ int processClient(int client_fd) {
   
  //Now we can forward the client's request to the server.
  //First re-format the request to a string
- char send_buffer[BUFSIZE];
- char* send_buffer_end = client_request.FormatRequest(send_buffer);
- int send_buffer_length = send_buffer_end - send_buffer;
- //Then send the request to the server 
- CHECK(send(server_fd, send_buffer, send_buffer_length, NOFLAGS))
-   cerr << "Sent Request to Server:" << endl << send_buffer << endl;
-
-  // char response_buffer[BUFSIZE];
-  // int response_length;
-  // CHECK(response_length = recv(server_fd, response_buffer, sizeof response_buffer, NOFLAGS))
+ // char send_buffer[BUFSIZE];
+ // char* send_buffer_end = client_request.FormatRequest(send_buffer);
+ // int send_buffer_length = send_buffer_end - send_buffer;
+ // //Then send the request to the server 
+ // CHECK(send(server_fd, send_buffer, send_buffer_length, NOFLAGS))
+   
+ char proxy_request[request_length];
+ client_request.FormatRequest(proxy_request);
+ CHECK(write(server_fd, proxy_request, request_length))
+   cerr << "Sent Request to Server:" << endl << proxy_request << endl;
+ 
+ HttpResponse server_res;
+ long total_length;
+ string tmp_res;
+ do {
+   memset(&buf, 0, sizeof buf);
+   len = read(server_fd, buf, sizeof buf);
+   tmp_res.append(buf);
+   
+   server_res.ParseResponse(tmp_res.c_str(), tmp_res.length());
+   total_length = server_res.GetTotalLength() + stol(server_res.FindHeader("Content-Length"));
+ } while (len > 0 && tmp_res.length() < total_length);
+ close(server_fd);
+ cerr << "Closed Connection with Server ... Server Response: " << endl << tmp_res << endl;
+ // tmp_res.append("\r\n\r\n");
+ char response[total_length];
+ server_res.FormatResponse(response);
+ write(client_fd, response, total_length);
+ cerr << "Sent Response to Client" << endl;
+ return -1;
     
-  // FUTURE NOTE: our connection to the remote server is HTTP/1.1
-  //              so we should have a timer to close the connection
-  // read server response
-  string server_response;
-  do {
-    memset(&buf, 0, sizeof buf);
-    len = read(server_fd, buf, sizeof buf);
-    cerr << "The server returned " << len << "bytes: " << endl << buf << endl;
-    server_response.append(buf);
-  } while (len > 0);
-  close(server_fd);
-  cerr << "Server Responded: " << endl << server_response << endl;
-
-	//Now send it to the client
-  // CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
-  write(client_fd, server_response.c_str(), server_response.length());
-  
-  cerr << "All done here" << endl;
-  close(client_fd);
-  return -1;
+  //   // FUTURE NOTE: our connection to the remote server is HTTP/1.1
+  //   //              so we should have a timer to close the connection
+  //   // read server response
+  //   HttpResponse server_response;
+  //   long total_length = -1;
+  //   string tmp_response;
+  //   do {
+  //     memset(&buf, 0, sizeof buf);
+  //     len = read(server_fd, buf, sizeof buf);
+  //     cerr << "The server returned " << len << "bytes: " << endl << buf << endl;
+  //     tmp_response.append(buf);
+  //     
+  //     if (total_length == -1) {
+  //       server_response.ParseResponse(tmp_response.c_str(), tmp_response.length());
+  //       total_length = server_response.GetTotalLength() + stol(server_response.FindHeader("Content-Length"));
+  //     }
+  // 
+  //     cerr << "Total Response Data Retrieved: " << tmp_response.length() << " / " << total_length << " bytes." << endl;
+  //   } while (len > 0 && tmp_response.length() < total_length);
+  //   close(server_fd);
+  //   cerr << "Closing Connection with Server ... Server Responded: " << endl << tmp_response << endl;
+  // 
+  // //Now send it to the client
+  //   // CHECK(send(client_fd, response_buffer, response_length, NOFLAGS))
+  //   write(client_fd, tmp_response.c_str(), tmp_response.length());
+  //   
+  //   cerr << "Finished Processing Client Request(s)" << endl;
+  //   close(client_fd);
+  //   return -1;
 }
 
 /* 
@@ -194,6 +226,7 @@ int main (int argc, char *argv[]) {
   	else {
       cerr << "I'm a child" << endl;
       processClient(client_fd);
+      close(client_fd);
   		exit(0);
   	}
       
