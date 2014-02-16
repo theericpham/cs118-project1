@@ -61,6 +61,7 @@ int processClient(int client_fd) {
   int len;
   do {
     memset(&client_request_buffer, 0, sizeof client_request_buffer);
+    len = 0;
     len = read(client_fd, client_request_buffer, sizeof client_request_buffer);
     request.append(client_request_buffer);
   } while ((len > 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
@@ -94,13 +95,21 @@ int processClient(int client_fd) {
   }
     
   // format proxy request to send to remote server
-  char proxy_request_buffer[client_request.GetTotalLength()];
+  int size = client_request.GetTotalLength();
+  char proxy_request_buffer[size];
   client_request.FormatRequest(proxy_request_buffer);
+  proxy_request_buffer[size] = 0;
   cerr << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
   if (memmem(proxy_request_buffer, client_request.GetTotalLength(), "\r\n\r\n", 4))
     cerr << "Proxy Request Contains \\r\\n" << endl;
   else
     cerr << "Proxy Request Missing \\r\\n" << endl;
+  
+  cerr << endl;
+  cerr << "String Request Length: " << request.length() << " bytes" << endl;
+  cerr << "Client Request Length: " << client_request.GetTotalLength() << " bytes" << endl;
+  cerr << "Proxy Request Length:  " << sizeof proxy_request_buffer << " bytes" << endl;
+  cerr << endl;
   
   string remote_server_host;
   short  remote_server_port;
@@ -121,18 +130,27 @@ int processClient(int client_fd) {
   char server_response_buffer[BUFSIZE + 1];
   do {
     memset(&server_response_buffer, 0, sizeof server_response_buffer);
+    len = 0;
+    cerr << "Before Reading Server Response: " << len << " bytes" << endl;
     len = read(server_fd, server_response_buffer, sizeof server_response_buffer);
+    cerr << "After Reading Server Response: " << len << " bytes" << endl;
     response.append(server_response_buffer);
-  } while ((len > 0) && (memmem(response.c_str(), response.length(), "\r\n\r\n", 4) == NULL));
+    // cerr << "Amount Read In is " << len << " bytes: " << endl << server_response_buffer << endl;
+  } while ((memmem(response.c_str(), response.length(), "\r\n\r\n", 4) == NULL));
+  // } while (len > 0);
   
   cerr << "Finished Reading Server Response:" << endl << response << endl;
   
   // close and shutdown connection with remote server
-  close(server_fd);
+  while (close(server_fd) < 0) {
+    cerr << "Waiting To Close Connection with Server ..." << endl;
+  }
   shutdown(server_fd, 2);
   
   // return server response to client
-  write(client_fd, response.c_str(), response.length());
+  while (write(client_fd, response.c_str(), response.length()) < 0) {
+    cerr << "Waiting To Close Connection with Client ..." << endl;
+  }
      
   // close and shutdown connection with client
   close(client_fd);
