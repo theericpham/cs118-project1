@@ -14,12 +14,19 @@
 #include "http-response.h"
 using namespace std;
 
-const char* PORT_PROXY_LISTEN   = "14886";
-const short PORT_SERVER_DEFAULT = 80;
-const char* NON_PERSISTENT      = "1.0";
-const char* PERSISTENT          = "1.1";
-const int BUFSIZE               = 1024;
-const int BACKLOG               = 20;
+const string GET_ERROR            = "Request is not GET";
+const string NOT_IMPLEMENTED_MSG  = "Not Implemented";
+const string BAD_REQUEST_MSG      = "Bad Request";
+const string NOT_IMPLEMENTED_CODE = "501";
+const string BAD_REQUEST_CODE     = "400";
+const char* NON_PERSISTENT        = "1.0";
+const char* PERSISTENT            = "1.1";
+
+const char* PORT_PROXY_LISTEN     = "14886";
+const short PORT_SERVER_DEFAULT   = 80;
+const int BUFSIZE                 = 1024;
+const int BACKLOG                 = 20;
+
 #define CHECK(F) if ( (F) == -1 ) cerr << "Error when calling " << #F << endl;
 #define CHECK_CONTINUE(F) if ( (F) == -1 ) { cerr << "Error when calling " << #F << endl; continue; }
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
@@ -46,66 +53,63 @@ int createRemoteSocket(string host, short port) {
 }
 
 int processClient(int client_fd) {
-  // FUTURE NOTE: for persistent connections we may want to wrap in a loop
-  // read request from client
-  string tmp_req;
-  char buf[BUFSIZE];
+  cerr << "Processing Client" << endl;
+
+  string request, response;
+  char client_request_buffer[BUFSIZE + 1];
   int len;
-  long request_length = 0;
-  while(memmem(tmp_req.c_str(), tmp_req.length(), "\r\n\r\n", 4) == NULL) {
-    memset(&buf, 0, sizeof buf);
-    len = read(client_fd, buf, sizeof buf);
-    request_length += len;
-    if (len > 0) 
-      tmp_req.append(buf); 
-    else 
-      break;
-  }
-  cerr << "Client Request: " << endl << tmp_req << endl;
+  do {
+    memset(&client_request_buffer, 0, sizeof client_request_buffer);
+    len = read(client_fd, client_request_buffer, sizeof client_request_buffer);
+    request.append(client_request_buffer);
+  } while ((len > 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
+  // cerr << "Client Request: " << endl << tmp_req << endl;
+  cerr << "Finished Reading Client Request: " << endl << request << endl;
   
-  // parse the client's request
-  HttpRequest client_request;  
+  // parse client request
+  HttpRequest client_request;
   try {
-    client_request.ParseRequest(tmp_req.c_str(), tmp_req.length());
+    client_request.ParseRequest(request.c_str(), request.length());
   } catch (ParseException e) {
-    cerr << e.what() << endl;
+    cerr << "Error Parsing Client Request: " << e.what() << endl;
+    HttpResponse error_response;
+    error_response.SetVersion(NON_PERSISTENT);
     
-    HttpResponse err_response;
-    err_response.SetVersion(PERSISTENT);
-    string err_msg;
-    string err_code;
-    string get_err = "Request is not GET";
-    
-    if (strcmp(e.what(), get_err.c_str()) == 0) {
-      err_code = "501";
-      err_msg  = "Not Implemented";
+    if (strcmp(e.what(), GET_ERROR.c_str()) == 0) {
+      error_response.SetStatusMsg(NOT_IMPLEMENTED_MSG);
+      error_response.SetStatusCode(NOT_IMPLEMENTED_CODE);
     }
     else {
-      err_code = "400";
-      err_msg  = "Bad Request";
+      error_response.SetStatusMsg(BAD_REQUEST_MSG);
+      error_response.SetStatusCode(BAD_REQUEST_CODE);
     }
-    err_response.SetStatusCode(err_code);
-    err_response.SetStatusMsg(err_msg);
     
-    char err_buf[err_response.GetTotalLength()];
-    err_response.FormatResponse(err_buf);
-    
-    write(client_fd, err_buf, err_response.GetTotalLength());
+    len = error_response.GetTotalLength() + 1;
+    char response_buffer[len];
+    error_response.FormatResponse(response_buffer);
+    write(client_fd, response_buffer, len);
     close(client_fd);
+    cerr << "Returned Error Response to Client and Closing Connection" << endl;
   }
   
-  // set the host and port properly
-  string host = client_request.GetHost();
-  short  port = client_request.GetPort();
-  if (host.length() == 0) 
-    host = client_request.FindHeader("Host");
-  if (!port)
-    port = PORT_SERVER_DEFAULT;
-  cerr << endl << "Client wants to connect to " << host << " on port " << port << endl;
-  cerr << "The path is " << client_request.GetPath() << endl;
-
-	//Connect to the remote server that the client requested and return the file descriptor
-  int server_fd = createRemoteSocket(host, port);
+  char proxy_request_buffer[client_request.GetTotalLength() + 1];
+  client_request.FormatRequest(proxy_request_buffer);
+  cerr << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
+  if (memmem(proxy_request_buffer, client_request.GetTotalLength() + 1, "\r\n\r\n", 4))
+    cerr << "Proxy Request Contains \\r\\n" << endl;
+  else
+    cerr << "Proxy Request Missing \\r\\n" << endl;
+  
+  string remote_server_host;
+  short  remote_server_port;
+  remote_server_host = (client_request.GetHost().length() == 0) ? client_request.GetHost() : client_request.FindHeader("Host");
+  remote_server_port = (!client_request.GetPort()) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
+  
+  cerr << "Client Wants to Connect to Remote Server Host " << remote_server_host << " on port " << remote_server_port << endl;
+  // 
+  // //Connect to the remote server that the client requested and return the file descriptor
+  //   int server_fd = createRemoteSocket(host, port);
+  //   CHECK(send(server_fd, proxy_request, client_request.GetTotalLength(), NOFLAGS))
   
  //Now we can forward the client's request to the server.
  //First re-format the request to a string
@@ -115,29 +119,28 @@ int processClient(int client_fd) {
  // //Then send the request to the server 
  // CHECK(send(server_fd, send_buffer, send_buffer_length, NOFLAGS))
    
- char proxy_request[request_length];
- client_request.FormatRequest(proxy_request);
- CHECK(write(server_fd, proxy_request, request_length))
-   cerr << "Sent Request to Server:" << endl << proxy_request << endl;
  
- HttpResponse server_res;
- long total_length;
- string tmp_res;
- do {
-   memset(&buf, 0, sizeof buf);
-   len = read(server_fd, buf, sizeof buf);
-   tmp_res.append(buf);
-   
-   server_res.ParseResponse(tmp_res.c_str(), tmp_res.length());
-   total_length = server_res.GetTotalLength() + stol(server_res.FindHeader("Content-Length"));
- } while (len > 0 && tmp_res.length() < total_length);
- close(server_fd);
- cerr << "Closed Connection with Server ... Server Response: " << endl << tmp_res << endl;
- // tmp_res.append("\r\n\r\n");
- char response[total_length];
- server_res.FormatResponse(response);
- write(client_fd, response, total_length);
- cerr << "Sent Response to Client" << endl;
+ // CHECK(write(server_fd, proxy_request, request_length))
+ //   cerr << "Sent Request to Server:" << endl << proxy_request << endl;
+ 
+ // HttpResponse server_res;
+ // long total_length;
+ // string tmp_res;
+ // do {
+ //   memset(&buf, 0, sizeof buf);
+ //   len = read(server_fd, buf, sizeof buf);
+ //   tmp_res.append(buf);
+ //   
+ //   server_res.ParseResponse(tmp_res.c_str(), tmp_res.length());
+ //   total_length = server_res.GetTotalLength() + stol(server_res.FindHeader("Content-Length"));
+ // } while (len > 0 && tmp_res.length() < total_length);
+ // close(server_fd);
+ // cerr << "Closed Connection with Server ... Server Response: " << endl << tmp_res << endl;
+ // // tmp_res.append("\r\n\r\n");
+ // char response[total_length];
+ // server_res.FormatResponse(response);
+ // write(client_fd, response, total_length);
+ // cerr << "Sent Response to Client" << endl;
  return -1;
     
   //   // FUTURE NOTE: our connection to the remote server is HTTP/1.1
@@ -218,6 +221,7 @@ int main (int argc, char *argv[]) {
     
     // accept client connection
   	CHECK_CONTINUE(client_fd = accept(sockfd, &client_addr, &sizevar))
+    cerr << "Accepted New Connection" << endl;
       
     // what if fork fails?
     if ( fork() ) {
