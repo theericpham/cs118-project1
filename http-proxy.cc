@@ -178,7 +178,17 @@ int main (int argc, char *argv[]) {
   CHECK(listen(sockfd, BACKLOG))
     
   // now loop forever, accepting a connection and forking a new process to deal with it
-  for (;;) {
+  //Keep track of the number of forked child processes; we'll be forking once per iteration
+  int number_children = 0, status;
+  for ( ;; ++number_children ) {
+  //Now here's the thing: Before accepting a connection and forking, make sure we haven't
+  //exceeded the backlog. If so, loop and wait for zombie children that we can clean up.
+  //As soon as we find one, decrease the counter so we can exit the loop.
+  //Idea from http://stackoverflow.com/questions/12591540/waitpid-and-fork-to-limit-number-of-child-processes
+  for ( ; number_children >= BACKLOG; --number_children )
+  	wait(&status); //Currently accepts connection and then hangs.
+  		//TODO Make sure this behavior is OK
+  	  	
     // setup client addr info
     struct sockaddr client_addr;
     memset(&client_addr, 0, sizeof client_addr);
