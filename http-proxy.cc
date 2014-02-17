@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/fcntl.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,9 +11,11 @@
 #include <netdb.h>
 #include <cstring>
 #include <string>
+#include <chrono>
 #include "http-request.h"
 #include "http-response.h"
 using namespace std;
+using namespace std::chrono;
 
 const string GET_ERROR            = "Request is not GET";
 const string NOT_IMPLEMENTED_MSG  = "Not Implemented";
@@ -21,6 +24,7 @@ const string NOT_IMPLEMENTED_CODE = "501";
 const string BAD_REQUEST_CODE     = "400";
 const char* NON_PERSISTENT        = "1.0";
 const char* PERSISTENT            = "1.1";
+const int TIMEOUT_TIME            = 3000; // milliseconds
 
 const char* PORT_PROXY_LISTEN     = "14886";
 const short PORT_SERVER_DEFAULT   = 80;
@@ -53,105 +57,126 @@ int createRemoteSocket(string host, short port) {
 }
 
 int processClient(int client_fd) {
-  cerr << "Processing Client" << endl;
+  //fcntl(client_fd, F_SETFL, O_NONBLOCK); // non-blocking IO
+  
+  int elapsed_time = 0;
+  time_point<system_clock> start_time, current_time;
+  start_time = system_clock::now();
+  bool persistent = false;
+  do {
+    cerr << "Processing Client" << endl;
 
-  // receive client request
-  string request, response;
-  char client_request_buffer[BUFSIZE + 1];
-  int len;
-  do {
-    memset(&client_request_buffer, 0, sizeof client_request_buffer);
-    len = 0;
-    len = read(client_fd, client_request_buffer, sizeof client_request_buffer);
-    request.append(client_request_buffer);
-  } while ((len > 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
-  cerr << "Finished Reading Client Request:" << endl << request << endl;
-  
-  // parse client request
-  HttpRequest client_request;
-  try {
-    client_request.ParseRequest(request.c_str(), request.length());
-  } catch (ParseException e) {
-    cerr << "Error Parsing Client Request: " << e.what() << endl;
-    HttpResponse error_response;
-    error_response.SetVersion(NON_PERSISTENT);
+    // receive client request
+    string request, response;
+    char client_request_buffer[BUFSIZE + 1];
+    int len;
+    do {
+      cerr << "Waiting To Read From Client" << endl;
+      memset(&client_request_buffer, 0, sizeof client_request_buffer);
+      len = 0;
+      len = read(client_fd, client_request_buffer, sizeof client_request_buffer);
+      request.append(client_request_buffer);
+      cerr << " Finished Read From Client" << endl;
+    } while ((len > 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
+    cerr << "Finished Reading Client Request:" << endl << request << endl;
+    if (len > 0)
+      start_time = system_clock::now();
+      
+    // parse client request
+    HttpRequest client_request;
+    try {
+      client_request.ParseRequest(request.c_str(), request.length());
+      if (client_request.GetVersion() == NON_PERSISTENT) {
+        client_request.ModifyHeader("Connection", "close");
+        persistent = false;
+      }
+      else
+        persistent = true;
+    } catch (ParseException e) {
+      cerr << "Error Parsing Client Request: " << e.what() << endl;
+      HttpResponse error_response;
+      error_response.SetVersion(NON_PERSISTENT);
     
-    if (strcmp(e.what(), GET_ERROR.c_str()) == 0) {
-      error_response.SetStatusMsg(NOT_IMPLEMENTED_MSG);
-      error_response.SetStatusCode(NOT_IMPLEMENTED_CODE);
+      if (strcmp(e.what(), GET_ERROR.c_str()) == 0) {
+        error_response.SetStatusMsg(NOT_IMPLEMENTED_MSG);
+        error_response.SetStatusCode(NOT_IMPLEMENTED_CODE);
+      }
+      else {
+        error_response.SetStatusMsg(BAD_REQUEST_MSG);
+        error_response.SetStatusCode(BAD_REQUEST_CODE);
+      }
+    
+      len = error_response.GetTotalLength();
+      char response_buffer[len];
+      error_response.FormatResponse(response_buffer);
+      write(client_fd, response_buffer, len);
+      close(client_fd);
+      shutdown(client_fd, 2);  // disallow further sends and receives
+      cerr << "Returned Error Response to Client and Closing Connection" << endl;
     }
-    else {
-      error_response.SetStatusMsg(BAD_REQUEST_MSG);
-      error_response.SetStatusCode(BAD_REQUEST_CODE);
+    
+    // format proxy request to send to remote server
+    int size = client_request.GetTotalLength();
+    char proxy_request_buffer[size];
+    client_request.FormatRequest(proxy_request_buffer);
+    proxy_request_buffer[size] = 0;
+    cerr << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
+    if (memmem(proxy_request_buffer, client_request.GetTotalLength(), "\r\n\r\n", 4))
+      cerr << "Proxy Request Contains \\r\\n" << endl;
+    else
+      cerr << "Proxy Request Missing \\r\\n" << endl;
+  
+    cerr << endl;
+    cerr << "String Request Length: " << request.length() << " bytes" << endl;
+    cerr << "Client Request Length: " << client_request.GetTotalLength() << " bytes" << endl;
+    cerr << "Proxy Request Length:  " << sizeof proxy_request_buffer << " bytes" << endl;
+    cerr << endl;
+  
+    string remote_server_host;
+    short  remote_server_port;
+    remote_server_host = (client_request.GetHost().length() != 0) ? client_request.GetHost() : client_request.FindHeader("Host");
+    remote_server_port = (client_request.GetPort() > 0) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
+  
+    cerr << "Client Wants to Connect to Remote Server Host " << remote_server_host << " on port " << remote_server_port << endl;
+  
+    // connect to remote server and return file descriptor
+    int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
+  
+    // foward client request to remote server
+    len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
+    cerr << "Proxy Sent " << len << " Byte Request To Remote Server." << endl;
+  
+    // receive server response
+    HttpResponse server_response;
+    char server_response_buffer[BUFSIZE + 1];
+    do {
+      memset(&server_response_buffer, 0, sizeof server_response_buffer);
+      // len = 0;
+      cerr << "Before Reading Server Response: " << len << " bytes" << endl;
+      sleep(1);
+      len = read(server_fd, server_response_buffer, sizeof server_response_buffer);
+      cerr << "After Reading Server Response: " << len << " bytes" << endl;
+      response.append(server_response_buffer);
+      // cerr << "Amount Read In is " << len << " bytes: " << endl << server_response_buffer << endl;
+    // } while ((len > 0) && (memmem(response.c_str(), response.length(), "\r\n\r\n", 4) == NULL));
+    } while (len >= sizeof server_response_buffer);
+  
+    cerr << "Finished Reading Server Response:" << endl << response << endl;
+  
+    // close and shutdown connection with remote server
+    while (close(server_fd) < 0) {
+      cerr << "Waiting To Close Connection with Server ..." << endl;
     }
-    
-    len = error_response.GetTotalLength();
-    char response_buffer[len];
-    error_response.FormatResponse(response_buffer);
-    write(client_fd, response_buffer, len);
-    close(client_fd);
-    shutdown(client_fd, 2);  // disallow further sends and receives
-    cerr << "Returned Error Response to Client and Closing Connection" << endl;
-  }
-    
-  // format proxy request to send to remote server
-  int size = client_request.GetTotalLength();
-  char proxy_request_buffer[size];
-  client_request.FormatRequest(proxy_request_buffer);
-  proxy_request_buffer[size] = 0;
-  cerr << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
-  if (memmem(proxy_request_buffer, client_request.GetTotalLength(), "\r\n\r\n", 4))
-    cerr << "Proxy Request Contains \\r\\n" << endl;
-  else
-    cerr << "Proxy Request Missing \\r\\n" << endl;
+    shutdown(server_fd, 2);
   
-  cerr << endl;
-  cerr << "String Request Length: " << request.length() << " bytes" << endl;
-  cerr << "Client Request Length: " << client_request.GetTotalLength() << " bytes" << endl;
-  cerr << "Proxy Request Length:  " << sizeof proxy_request_buffer << " bytes" << endl;
-  cerr << endl;
-  
-  string remote_server_host;
-  short  remote_server_port;
-  remote_server_host = (client_request.GetHost().length() != 0) ? client_request.GetHost() : client_request.FindHeader("Host");
-  remote_server_port = (client_request.GetPort() > 0) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
-  
-  cerr << "Client Wants to Connect to Remote Server Host " << remote_server_host << " on port " << remote_server_port << endl;
-  
-  // connect to remote server and return file descriptor
-  int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
-  
-  // foward client request to remote server
-  len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
-  cerr << "Proxy Sent " << len << " Byte Request To Remote Server." << endl;
-  
-  // receive server response
-  HttpResponse server_response;
-  char server_response_buffer[BUFSIZE + 1];
-  do {
-    memset(&server_response_buffer, 0, sizeof server_response_buffer);
-    len = 0;
-    cerr << "Before Reading Server Response: " << len << " bytes" << endl;
-    len = read(server_fd, server_response_buffer, sizeof server_response_buffer);
-    cerr << "After Reading Server Response: " << len << " bytes" << endl;
-    response.append(server_response_buffer);
-    // cerr << "Amount Read In is " << len << " bytes: " << endl << server_response_buffer << endl;
-  } while ((memmem(response.c_str(), response.length(), "\r\n\r\n", 4) == NULL));
-  // } while (len > 0);
-  
-  cerr << "Finished Reading Server Response:" << endl << response << endl;
-  
-  // close and shutdown connection with remote server
-  while (close(server_fd) < 0) {
-    cerr << "Waiting To Close Connection with Server ..." << endl;
-  }
-  shutdown(server_fd, 2);
-  
-  // return server response to client
-  while (write(client_fd, response.c_str(), response.length()) < 0) {
-    cerr << "Waiting To Close Connection with Client ..." << endl;
-  }
-     
+    // return server response to client
+    while (write(client_fd, response.c_str(), response.length()) < 0) {
+      cerr << "Waiting To Close Connection with Client ..." << endl;
+    }
+    current_time = system_clock::now();
+    elapsed_time = duration_cast<milliseconds> (current_time - start_time).count();
+  } while ((elapsed_time <= TIMEOUT_TIME) && persistent);
+  cerr << "Closed Connection with the Server ..." << endl;
   // close and shutdown connection with client
   close(client_fd);
   shutdown(client_fd, 2);
