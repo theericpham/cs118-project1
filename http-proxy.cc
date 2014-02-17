@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/fcntl.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +25,8 @@ const string NOT_IMPLEMENTED_CODE = "501";
 const string BAD_REQUEST_CODE     = "400";
 const char* NON_PERSISTENT        = "1.0";
 const char* PERSISTENT            = "1.1";
-const int TIMEOUT_TIME            = 3000; // milliseconds
+const int TIMEOUT_TIME            = 3 * 1000; // milliseconds
+const int POLL_TIMEOUT            = 3 * 1000; // milliseconds
 
 const char* PORT_PROXY_LISTEN     = "14886";
 const short PORT_SERVER_DEFAULT   = 80;
@@ -57,11 +59,14 @@ int createRemoteSocket(string host, short port) {
 }
 
 int processClient(int client_fd) {
-  //fcntl(client_fd, F_SETFL, O_NONBLOCK); // non-blocking IO
+  struct pollfd ufds;
+  ufds.fd = client_fd;
+  ufds.events = POLLIN;
   
   int elapsed_time = 0;
   time_point<system_clock> start_time, current_time;
   start_time = system_clock::now();
+  
   bool persistent = false;
   do {
     cerr << "Processing Client" << endl;
@@ -73,11 +78,10 @@ int processClient(int client_fd) {
     do {
       cerr << "Waiting To Read From Client" << endl;
       memset(&client_request_buffer, 0, sizeof client_request_buffer);
-      len = 0;
-      len = read(client_fd, client_request_buffer, sizeof client_request_buffer);
-      request.append(client_request_buffer);
-      cerr << " Finished Read From Client" << endl;
-    } while ((len > 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
+      if ((poll(&ufds, 1, POLL_TIMEOUT) > 0) && (len = read(client_fd, client_request_buffer, sizeof client_request_buffer) > 0))
+        request.append(client_request_buffer);
+      cerr << "Finished Read From Client" << endl;
+    } while (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL);
     cerr << "Finished Reading Client Request:" << endl << request << endl;
     if (len > 0)
       start_time = system_clock::now();
