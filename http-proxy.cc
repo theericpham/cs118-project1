@@ -26,7 +26,7 @@ const string BAD_REQUEST_CODE     = "400";
 const char* NON_PERSISTENT        = "1.0";
 const char* PERSISTENT            = "1.1";
 const int TIMEOUT_TIME            = 3 * 1000; // milliseconds
-const int POLL_TIMEOUT            = 3 * 1000; // milliseconds
+const int POLL_TIMEOUT            = 1 * 60 * 1000; // milliseconds
 
 const char* PORT_PROXY_LISTEN     = "14886";
 const short PORT_SERVER_DEFAULT   = 80;
@@ -75,13 +75,16 @@ int processClient(int client_fd) {
     string request, response;
     char client_request_buffer[BUFSIZE + 1];
     int len;
+    int rv;
     do {
+      // we are not handling polling errors
       cerr << "Waiting To Read From Client" << endl;
       memset(&client_request_buffer, 0, sizeof client_request_buffer);
-      if ((poll(&ufds, 1, POLL_TIMEOUT) > 0) && (len = read(client_fd, client_request_buffer, sizeof client_request_buffer) > 0))
+      if ((rv = poll(&ufds, 1, POLL_TIMEOUT) > 0) && 
+        (len = read(client_fd, client_request_buffer, sizeof client_request_buffer) > 0))
         request.append(client_request_buffer);
       cerr << "Finished Read From Client" << endl;
-    } while (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL);
+    } while ((rv != 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
     cerr << "Finished Reading Client Request:" << endl << request << endl;
     if (len > 0)
       start_time = system_clock::now();
