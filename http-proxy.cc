@@ -15,7 +15,6 @@
 #include <map>
 #include <chrono>
 #include <ctime>
-#include <boost/date_time/posix_time/posix_time.hpp>
 #include "http-request.h"
 #include "http-response.h"
 using namespace std;
@@ -169,12 +168,11 @@ short extractPort(HttpRequest& request) {
 
 timept timept_from_string(const string& time_string) {
 	//Converts a string like "Mon, 17 Feb 2014 17:32:17 GMT" to time_point<system_clock>
-	using namespace boost::posix_time;
-	//First convert this string to a boost timepoint, then to a tm struct, then to a time_t
-	ptime time_ptime = time_from_string(time_string);
-	tm time_tm = to_tm(time_ptime);
-	time_t time_tt = mktime(&time_tm);
-	return system_clock::from_time_t(time_tt); //Finally return a time_point object
+	static const char format[] = "%a, %d %b %Y %H:%M:%S %Z"; // rfc 1123
+	tm t;
+	strptime(time_string.c_str(), format, &t);
+	time_t tt = mktime(&t);
+	return system_clock::from_time_t(tt); //Finally return a time_point object
 }
 
 timept extractExpireTime(HttpResponse& response) {
