@@ -83,18 +83,25 @@ string readFromSocket(int fd, int waitForBody) {
   ufds.events = POLLIN;
   
 	char buffer[BUFSIZE + 1];
-  bool carriage = false;
+  bool foundCarriage = false;
 	string result;
 	int len;
   int rv;
 	do {
 		memset(&buffer, 0, sizeof buffer);
-    if ((rv = poll(&ufds, 1, POLL_TIMEOUT) > 0) && (len = read(fd, buffer, sizeof buffer) > 0))
+    if (((rv = poll(&ufds, 1, POLL_TIMEOUT)) > 0) && ((len = read(fd, buffer, sizeof buffer)) > 0))
 	    result.append(buffer);
+    cerr << "rv: " << rv << endl;
     cerr << "len: " << len << endl;
     cerr << "waitForBody: " << waitForBody << endl;
-    carriage = (memmem(result.c_str(), result.length(), "\r\n\r\n", 4) == NULL);
-  } while ((rv != 0) && ((carriage && !waitForBody) || ((len >= sizeof buffer) && waitForBody)));
+    foundCarriage = (memmem(result.c_str(), result.length(), "\r\n\r\n", 4) != NULL);
+    cerr << "found carriage: " << foundCarriage << endl;
+  } while ((rv != 0) && ((!foundCarriage && !waitForBody) || ((len > 0) && waitForBody)));
+  cerr << "Outside of loop" << endl;
+  cerr << "rv: " << rv << endl;
+  cerr << "len: " << len << endl;
+  cerr << "waitForBody: " << waitForBody << endl;
+  cerr << "found carriage: " << foundCarriage << endl;
 	return result;
 }
 
@@ -106,8 +113,13 @@ void readResponseAndBody(int server_fd, HttpResponse& response, string& body) {
 	//Once again, literally the same thing as readClientRequest, except we have to call different
 	//functions here.
 	string response_string = readFromSocket(server_fd, true);
+  cerr << endl << "RESPONSE STRING IN READ RESPONSE AND BODY" << endl << response_string << endl;
 	unsigned body_pos = response_string.find("\r\n\r\n");
-	body = response_string.substr(body_pos + 4);
+  if (body_pos == -1) {
+    response_string += "\r\n\r\n";
+    body = "";
+  }
+  else body = response_string.substr(body_pos + 4);
 	//Now all of server response is in response_string; load it into an HttpResponse object
 	response.ParseResponse(response_string.c_str(), response_string.length());
 }
@@ -133,6 +145,8 @@ int sendResponseAndBodyToClient(int client_fd, HttpResponse& response, const str
 	//This function simply flattens an HttpResponse object into a C string and sends it.
 	char response_buffer[response.GetTotalLength()];
 	response.FormatResponse(response_buffer);
+  response_buffer[response.GetTotalLength()] = 0;
+  cerr << endl << "RESPONSE BUFFER" << endl << response_buffer << endl << "BODY"<< endl << body << endl;
 	return write(client_fd, response_buffer, sizeof response_buffer) &&
 	write(client_fd, body.c_str(), body.length());
 }
@@ -144,8 +158,15 @@ int sendRequestToServer(int server_fd, HttpRequest& request) {
 	//which are not virtual.. this is really icky OO for class HttpHeaders :(
 	char request_buffer[request.GetTotalLength()];
 	request.FormatRequest(request_buffer);
+  request_buffer[request.GetTotalLength()] = 0;
 	cerr << "Formatted Proxy Request: " << endl << request_buffer << endl;
-	return write(server_fd, request_buffer, sizeof request_buffer);
+  bool b = memmem(request_buffer, request.GetTotalLength(), "\r\n\r\n", 4) != NULL;
+  if (b) cerr << endl << "CONTAINS CARRIAGE" << endl;
+  else cerr << endl << "CONTAINS CARRIAGE" << endl;
+	int w = write(server_fd, request_buffer, sizeof request_buffer);
+  cerr << endl << "RESULT OF WRITING TO SERVER: " << w << endl;
+  cerr << endl << "WROTE REQUEST TO SERVER" << endl;
+  return w;
 }
 
 bool needsUpdate(const string& cache_key) {
@@ -176,7 +197,6 @@ timept timept_from_string(const string& time_string) {
 }
 
 timept extractExpireTime(HttpResponse& response) {
-  cerr << "Resposne is:" << endl << response <<endl;
 	string exptime_string = response.FindHeader("Expires");
   cerr << "Expires: " << exptime_string << endl;
 	if ( exptime_string == "" || exptime_string == DONT_CACHE ) //If the page comes with no expiration 
@@ -202,6 +222,7 @@ int updateCache(HttpRequest& request) {
 	//Takes a cilent request and extracts the page page from it to update the cache
 	//First use the various parts of request to figure out which page the client wants
 	string cache_key = getCacheKey(request);
+  cerr << endl << "GOT CACHE KEY: " << cache_key << endl;
 
 	if ( needsUpdate(cache_key) ) { //If cached copy is expired or has never been downloaded
 			cerr << "Updating cache for " << cache_key << endl;
@@ -210,11 +231,17 @@ int updateCache(HttpRequest& request) {
 			short remote_server_port = extractPort(request);
 			int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
 			// foward client request to remote server
+      cerr << endl << "CONNECTED TO SERVER ON FD " << server_fd << endl;
 			CHECK(sendRequestToServer(server_fd, request))
+        cerr << endl << "RETURNED FROM WRITING TO SERVER AND BACK IN UPDATE CACHE" << endl;
 			//And get back the response to update cache with
 			HttpResponse server_response;
 			string body;
+      cerr << endl << "BEFORE READ RESPONSE AND BODY" << endl;
 			readResponseAndBody(server_fd, server_response, body);
+      cerr << "RESPONSE STATUS CODE" << server_response.GetStatusCode() << endl;
+      cerr << "BODY IN UPDATECACHE" << endl <<  body << endl;
+      cerr << endl << "AFTER READ RESPONSE AND BODY" << endl;
 			// close and shutdown connection with remote server
 			clean_up_socket(server_fd);
 			//Cache entry consists of {response, timestamp, expiration time}
@@ -243,7 +270,7 @@ int processClient(int client_fd) {
   	try {
   		HttpRequest client_request = readClientRequest(client_fd);
       start_time = system_clock::now(); // mark start_time
-      
+      cerr << endl << "GOT CLIENT REQUEST" << endl;
       if (client_request.GetVersion() == NON_PERSISTENT) {
         client_request.ModifyHeader("Connection", "close");
         persistent = false;
@@ -252,13 +279,16 @@ int processClient(int client_fd) {
       
   		//Update the cached copy if necessary
   		updateCache(client_request);
+      cerr << endl << "UPDATED CACHE" << endl;
   		string cache_key = getCacheKey(client_request);
   		//Now it doesn't matter if the cache was updated or not; we give the client the cached copy
   		//of the response/page.
   		body = g_cache[cache_key].response;
+      cerr << "GET BODY FROM CACHE" << endl << body << endl;
   		proxy_response.SetStatusMsg("OK");
   		proxy_response.SetStatusCode("200");
   		proxy_response.SetVersion(client_request.GetVersion());
+      
   	} //end try
   	catch (ParseException e) {
   		//TODO what if there's an error parsing the server response? :o
@@ -274,7 +304,10 @@ int processClient(int client_fd) {
 
   	//These things have to be done whether or not the parsing succeeded:
   		// return server response to client
+    cerr << endl << "BEFORE SEND RESPONSE TO CLIENT" << endl;
   	CHECK(sendResponseAndBodyToClient(client_fd, proxy_response, body))
+    cerr << endl << "SENT RESPONSE TO CLIENT" << endl;
+    
   		// close and shutdown connection with client
       cur_time = system_clock::now();
       elapsed_time = duration_cast<milliseconds> (cur_time - start_time).count();
