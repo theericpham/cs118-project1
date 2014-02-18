@@ -10,9 +10,14 @@
 #include <netdb.h>
 #include <cstring>
 #include <string>
+#include <map>
+#include <chrono>
+#include <ctime>
+#include <boost/date_time/posix_time/posix_time.hpp>
 #include "http-request.h"
 #include "http-response.h"
 using namespace std;
+using namespace std::chrono;
 
 const string GET_ERROR						= "Request is not GET";
 const string NOT_IMPLEMENTED_MSG	= "Not Implemented";
@@ -26,11 +31,22 @@ const char* PORT_PROXY_LISTEN		 = "14886";
 const short PORT_SERVER_DEFAULT	 = 80;
 const int BUFSIZE								 = 1024;
 const int BACKLOG								 = 20;
+const string DONT_CACHE 					= "-1";
 
 #define CHECK(F) if ( (F) == -1 ) cerr << "Error when calling " << #F << endl;
 #define CHECK_CONTINUE(F) if ( (F) == -1 ) { cerr << "Error when calling " << #F << endl; continue; }
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
 #define NOFLAGS 0
+
+typedef struct {
+	string response;
+	time_point<system_clock> timestamp;
+	time_point<system_clock> expires;
+} CacheEntry;
+typedef map<string, CacheEntry> cache;
+typedef time_point<system_clock> timept;
+
+cache g_cache;
 
 void clean_up_socket(int fd) {
 	close(fd);
@@ -70,17 +86,17 @@ string readFromSocket(int fd) {
 }
 
 
-HttpResponse readServerResponse(int server_fd) {
+void readResponseAndBody(int server_fd, HttpResponse& response, string& body) {
 	//Create an empty HttpResponse object. Call our generic low-level function to read from 
 	//the server socket into a C++ string, then push that into the HttpResponse as a C string
 	//and return the HttpResponse object.
 	//Once again, literally the same thing as readClientRequest, except we have to call different
 	//functions here.
-	HttpResponse response;
 	string response_string = readFromSocket(server_fd);
+	unsigned body_pos = response_string.find("\r\n\r\n");
+	body = response_string.substr(body_pos + 4);
 	//Now all of server response is in response_string; load it into an HttpResponse object
 	response.ParseResponse(response_string.c_str(), response_string.length());
-	return response;
 }
 
 HttpRequest readClientRequest(int client_fd) {
@@ -89,7 +105,7 @@ HttpRequest readClientRequest(int client_fd) {
 	cerr << "Finished Reading Client Request:" << endl << request_string << endl;
 	
 	//Now create a HttpRequest object to parse the client's request
-	//This one is a little more complicated than readServerResponse because we have to check
+	//This one is a little more complicated than the other function because we have to check
 	//for errors.
 	HttpRequest request;
 	try {
@@ -100,14 +116,15 @@ HttpRequest readClientRequest(int client_fd) {
 	return request;
 }
 
-int sendResponseToClient(int client_fd, const HttpResponse& response) {
+int sendResponseAndBodyToClient(int client_fd, HttpResponse& response, const string& body) {
 	//This function simply flattens an HttpResponse object into a C string and sends it.
 	char response_buffer[response.GetTotalLength()];
 	response.FormatResponse(response_buffer);
-	return write(client_fd, response_buffer, sizeof response_buffer);
+	return write(client_fd, response_buffer, sizeof response_buffer) &&
+	write(client_fd, body.c_str(), body.length());
 }
 
-int sendRequestToServer(int server_fd, const HttpRequest& request) {
+int sendRequestToServer(int server_fd, HttpRequest& request) {
 	//This function simply flattens an HttpRequest object into a C string and sends it.
 	//Note that this function is literally the exact same thing as sendResponseToClient,
 	//except we have to use the different functions FormatRequest and FormatResponse,
@@ -118,30 +135,94 @@ int sendRequestToServer(int server_fd, const HttpRequest& request) {
 	return write(server_fd, request_buffer, sizeof request_buffer);
 }
 
+bool needsUpdate(const string& cache_key) {
+	//Checks to see if cache_key has an associated cache entry. If yes, check to see if it's expired.
+	//Check expired time vs current time to see if we need to check for a new version of the page
+	timept now = system_clock::now();
+	//If a cache entry exists
+	cache::iterator iter = g_cache.find(cache_key);
+	bool in_cache =  iter != g_cache.end();
+	return !in_cache || now > iter->second.expires; //True if not found or expires before now
+}
+
+string extractHost(HttpRequest& request) {
+	return (request.GetHost().length() != 0) ? request.GetHost() : request.FindHeader("Host");
+}
+
+short extractPort(HttpRequest& request) {
+	return (request.GetPort() > 0) ? request.GetPort() : PORT_SERVER_DEFAULT;
+}
+
+timept timept_from_string(const string& time_string) {
+	//Converts a string like "Mon, 17 Feb 2014 17:32:17 GMT" to time_point<system_clock>
+	using namespace boost::posix_time;
+	//First convert this string to a boost timepoint, then to a tm struct, then to a time_t
+	ptime time_ptime = time_from_string(time_string);
+	tm time_tm = to_tm(time_ptime);
+	time_t time_tt = mktime(&time_tm);
+	return system_clock::from_time_t(time_tt); //Finally return a time_point object
+}
+
+timept extractExpireTime(HttpResponse& response) {
+	string exptime_string = response.FindHeader("Expires");
+	if ( exptime_string == "" || exptime_string == DONT_CACHE ) //If the page comes with no expiration 
+		return  system_clock::now();
+	else { //If there is an expiration time in the response
+		return timept_from_string(exptime_string);
+	}	
+}
+
+string getCacheKey(HttpRequest& request) {
+	//Figure out which page the client wants by extracting host, port, and path from the request
+	string host = extractHost(request);
+	short port = extractPort(request);
+	string path = "/"; //temporary
+	return host + ":" + to_string(port) + path;
+}
+
+int updateCache(HttpRequest& request) {
+	//Takes a cilent request and extracts the page page from it to update the cache
+	//First use the various parts of request to figure out which page the client wants
+	string cache_key = getCacheKey(request);
+	
+	if ( needsUpdate(cache_key) ) { //If cached copy is expired or has never been downloaded
+			cerr << "Updating cache for " << cache_key << endl;
+			// connect to remote server and return file descriptor	
+			string remote_server_host = extractHost(request);
+			short remote_server_port = extractPort(request);
+			int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
+			// foward client request to remote server
+			CHECK(sendRequestToServer(server_fd, request))
+			//And get back the response to update cache with
+			HttpResponse server_response;
+			string body;
+			readResponseAndBody(server_fd, server_response, body);
+			// close and shutdown connection with remote server
+			clean_up_socket(server_fd);
+			//Cache entry consists of {response, timestamp, expiration time}
+			timept now = system_clock::now(); 
+			timept exptime = extractExpireTime(server_response);
+			CacheEntry new_entry = {body, now, exptime};
+			g_cache[cache_key] = new_entry;
+	}
+	return 0;
+}
+
 int processClient(int client_fd) {
 	HttpResponse proxy_response; //Will be used to store both success and failure response
+	string body;
 	//First try to read the client's request. If there's a problem, form an error response.
 	try {
 		HttpRequest client_request = readClientRequest(client_fd);
-	
-		//Get the page and store the current time and expiration date. If there's no expiration date,
-		//just set it to some special value.
-		//Then when the client says "I want www.google.com/" look it up in the map and check the 
-		//expired time. If it's expired, then ask the server if it's been modified. If it has, 
-		//get a new copy to put in our $. 
-		//No matter, send the client our $ed copy in the end, cus it will have been updated if needed.
-		
-		// connect to remote server and return file descriptor	
-		string remote_server_host = (client_request.GetHost().length() != 0) ? client_request.GetHost() : client_request.FindHeader("Host");
-		short remote_server_port = (client_request.GetPort() > 0) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
-		int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
-	
-		// foward client request to remote server
-		CHECK(sendRequestToServer(server_fd, client_request))
-		//And get back the response to forward to client a bit later
-		proxy_response = readServerResponse(server_fd);
-		// close and shutdown connection with remote server
-		clean_up_socket(server_fd);
+		//Update the cached copy if necessary
+		updateCache(client_request);
+		string cache_key = getCacheKey(client_request);
+		//Now it doesn't matter if the cache was updated or not; we give the client the cached copy
+		//of the response/page.
+		body = g_cache[cache_key].response;
+		proxy_response.SetStatusMsg("OK");
+		proxy_response.SetStatusCode("200");
+		proxy_response.SetVersion(client_request.GetVersion());
 	} //end try
 	catch (ParseException e) {
 		//TODO what if there's an error parsing the server response? :o
@@ -151,14 +232,14 @@ int processClient(int client_fd) {
 		bool not_impl = !strcmp(e.what(), GET_ERROR.c_str());
 		proxy_response.SetStatusMsg(not_impl ? NOT_IMPLEMENTED_MSG : BAD_REQUEST_MSG);
 		proxy_response.SetStatusCode(not_impl ? NOT_IMPLEMENTED_CODE : BAD_REQUEST_CODE);
+		body = "";
 		cerr << "Returned Error Response to Client" << endl;
 	}
 	
-	//These things have to be done whether or not the parsing succeeded
-	// return server response to client
-	CHECK(sendResponseToClient(client_fd, proxy_response))
-		 
-	// close and shutdown connection with client
+	//These things have to be done whether or not the parsing succeeded:
+		// return server response to client
+	CHECK(sendResponseAndBodyToClient(client_fd, proxy_response, body))
+		// close and shutdown connection with client
 	clean_up_socket(client_fd);
 	return -1; //TODO why do we return -1?
 }

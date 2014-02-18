@@ -17,7 +17,7 @@ def configure (env):
 #    env.options.boost_libs     = '/u/cs/grad/yingdi/boost/lib'
 #
 
-    env.check_boost(lib='system thread')
+    env.check_boost(lib='system thread date_time')
     env.add_supported_cxxflags (cxxflags = ['-O0', '-g3', '-Wall', 
                                             '-Wno-unused-private-field', 
                                             '-fcolor-diagnostics', '-Qunused-arguments', 
