@@ -25,7 +25,9 @@ persistent to allow the client a window to make additional requests.
 
 Unforunately, our cache was not shared by all processes, so we can't guarantee correctness; we declared a global static cache, but each 
 process created its own copy of the cache.  We attempted to make cache a global object by using Boost shared memory, but this caused the 
-proxy to hang when accessing the cache and we ran short on time so we could not resolve the issue.
+proxy to hang when accessing the cache and we ran short on time so we could not resolve the issue.  Nevertheless, we still attempted to
+implement the conditional GET request from proxy to server by appending a header for If-Modified-Since to our request.  However, since our
+cache is not consitent across threads, our conditional GET will only work for each thread and not across all threads.
 
 General
 =======
