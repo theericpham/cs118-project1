@@ -1,4 +1,3 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 #include <iostream>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -148,6 +147,7 @@ int processClient(int client_fd) {
   
     // connect to remote server and return file descriptor
     int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
+    fcntl(server_fd, F_SETFL, O_NONBLOCK);
   
     // foward client request to remote server
     len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
