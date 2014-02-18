@@ -433,6 +433,8 @@
 #include <cstring>
 #include <string>
 #include <chrono>
+#include <map>
+#include <ctime>
 #include "http-request.h"
 #include "http-response.h"
 using namespace std;
@@ -448,6 +450,7 @@ const char* PERSISTENT            = "1.1";
 const int TIMEOUT_TIME            = 3 * 1000; // milliseconds
 const int POLL_TIMEOUT            = 1 * 60 * 1000; // milliseconds
 const int MAX_ATTEMPTS            = 3;
+const string DONT_CACHE           = "-1";
 
 const char* PORT_PROXY_LISTEN     = "14886";
 const short PORT_SERVER_DEFAULT   = 80;
@@ -459,6 +462,71 @@ const int BACKLOG                 = 20;
 #define ERROR(format, ...) fprintf(stderr, format, ## __VA_ARGS__);
 #define NOFLAGS 0
 
+typedef struct {
+  string response;
+  time_point<system_clock> timestamp;
+  time_point<system_clock> expires;
+} CacheEntry;
+typedef map<string, CacheEntry> cache;
+typedef time_point<system_clock> timept;
+
+static cache g_cache;
+
+void clean_up_socket(int fd) {
+  // close(fd);
+  while (close(fd) < 0);
+  shutdown(fd, 2);
+}
+
+string extractHost(HttpRequest& request) {
+  return (request.GetHost().length() != 0) ? request.GetHost() : request.FindHeader("Host");
+}
+
+short extractPort(HttpRequest& request) {
+  return (request.GetPort() > 0) ? request.GetPort() : PORT_SERVER_DEFAULT;
+}
+
+// Figure out which page the client wants by extracting host, port, and path from the request
+string getCacheKey(HttpRequest& request) {
+  string host = extractHost(request);
+  short port = extractPort(request);
+  string path = request.GetPath();
+  return host + ":" + to_string(port) + path;
+}
+
+// Converts a string like "Mon, 17 Feb 2014 17:32:17 GMT" to time_point<system_clock>
+timept timept_from_string(const string& time_string) { 
+  static const char format[] = "%a, %d %b %Y %H:%M:%S %Z"; // rfc 1123
+  tm t;
+  strptime(time_string.c_str(), format, &t);
+  time_t tt = mktime(&t);
+  return system_clock::from_time_t(tt); //Finally return a time_point object
+}
+
+// return the expire time from response header
+timept extractExpireTime(HttpResponse& response) {
+  string exptime_string = response.FindHeader("Expires");
+  cerr << endl << "Expires: " << exptime_string << endl;
+  if ( exptime_string == "" || exptime_string == DONT_CACHE ) //If the page comes with no expiration 
+  {
+    cerr << endl << "Hello" << endl;
+    return  system_clock::now();
+  }
+  else { //If there is an expiration time in the response
+    cerr << endl << "Oh God" << endl;
+    return timept_from_string(exptime_string);
+  }  
+}
+
+bool needsUpdate(const string& cache_key) {
+  //Checks to see if cache_key has an associated cache entry. If yes, check to see if it's expired.
+  //Check expired time vs current time to see if we need to check for a new version of the page
+  timept now = system_clock::now();
+  //If a cache entry exists
+  cache::iterator iter = g_cache.find(cache_key);
+  bool in_cache =  iter != g_cache.end();
+  return !in_cache || now > iter->second.expires; //True if not found or expires before now
+}
 
 int createRemoteSocket(string host, short port) {
 	cerr << endl << "Connecting to " << host << ":" << port << endl;
@@ -581,54 +649,69 @@ int processClient(int client_fd) {
         shutdown(client_fd, 2);  // disallow further sends and receives
         cerr << endl << "Returned Error Response to Client and Closing Connection" << endl;
       }
-    
-      // format proxy request to send to remote server
-      int size = client_request.GetTotalLength();
-      char proxy_request_buffer[size];
-      client_request.FormatRequest(proxy_request_buffer);
-      proxy_request_buffer[size] = 0;
-      cerr << endl << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
-      if (memmem(proxy_request_buffer, client_request.GetTotalLength(), "\r\n\r\n", 4))
-        cerr << endl << "Proxy Request Contains \\r\\n" << endl;
-      else
-        cerr << endl << "Proxy Request Missing \\r\\n" << endl;
+       
+      string cache_key = getCacheKey(client_request);
+      
+      // replace cached response if it's expired
+      if (needsUpdate(cache_key)) {
+        cerr << endl << "ENTR"
+        // format proxy request to send to remote server
+        int size = client_request.GetTotalLength();
+        char proxy_request_buffer[size];
+        client_request.FormatRequest(proxy_request_buffer);
+        proxy_request_buffer[size] = 0;
+        cerr << endl << "Formatted Proxy Request: " << endl << proxy_request_buffer << endl;
+        if (memmem(proxy_request_buffer, client_request.GetTotalLength(), "\r\n\r\n", 4))
+          cerr << endl << "Proxy Request Contains \\r\\n" << endl;
+        else
+          cerr << endl << "Proxy Request Missing \\r\\n" << endl;
   
-      cerr << endl << endl;
-      cerr << endl << "String Request Length: " << request.length() << " bytes" << endl;
-      cerr << endl << "Client Request Length: " << client_request.GetTotalLength() << " bytes" << endl;
-      cerr << endl << "Proxy Request Length:  " << sizeof proxy_request_buffer << " bytes" << endl;
-      cerr << endl << endl;
+        cerr << endl << endl;
+        cerr << endl << "String Request Length: " << request.length() << " bytes" << endl;
+        cerr << endl << "Client Request Length: " << client_request.GetTotalLength() << " bytes" << endl;
+        cerr << endl << "Proxy Request Length:  " << sizeof proxy_request_buffer << " bytes" << endl;
+        cerr << endl << endl;
   
-      // find host and port to connect to
-      string remote_server_host;
-      short  remote_server_port;
-      remote_server_host = (client_request.GetHost().length() != 0) ? client_request.GetHost() : client_request.FindHeader("Host");
-      remote_server_port = (client_request.GetPort() > 0) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
+        // find host and port to connect to
+        string remote_server_host;
+        short  remote_server_port;
+        remote_server_host = (client_request.GetHost().length() != 0) ? client_request.GetHost() : client_request.FindHeader("Host");
+        remote_server_port = (client_request.GetPort() > 0) ? client_request.GetPort() : PORT_SERVER_DEFAULT;
   
-      cerr << endl << "Client Wants to Connect to Remote Server Host " << remote_server_host << " on port " << remote_server_port << endl;
+        cerr << endl << "Client Wants to Connect to Remote Server Host " << remote_server_host << " on port " << remote_server_port << endl;
   
-      // connect to remote server and return file descriptor
-      int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
-      fcntl(server_fd, F_SETFL, O_NONBLOCK);
+        // connect to remote server and return file descriptor
+        int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
+        fcntl(server_fd, F_SETFL, O_NONBLOCK);
   
-      // foward client request to remote server
-      len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
-      cerr << endl << "Proxy Sent " << len << " Byte Request To Remote Server." << endl;
+        // foward client request to remote server
+        len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
+        cerr << endl << "Proxy Sent " << len << " Byte Request To Remote Server." << endl;
   
-      // receive server response
-      HttpResponse server_response;
-      response = readServerResponse(server_fd);
+        // receive and parse server response
+        HttpResponse server_response;
+        response = readServerResponse(server_fd);
+        try {
+          server_response.ParseResponse(response.c_str(), response.length());
+        } catch (ParseException e) {
+          cerr << endl << "Error Parsing Server Response:" << endl << e.what() << endl;
+        }
+        
+        // mark time of cache and expire
+        timept now = system_clock::now(); 
+        timept exptime = extractExpireTime(server_response);
+        CacheEntry new_entry = {response, now, exptime};
+        g_cache[cache_key] = new_entry;  // cache fresh server response
+        
+        cerr << endl << "Finished Reading Server Response:" << endl << response << endl;
   
-      cerr << endl << "Finished Reading Server Response:" << endl << response << endl;
-  
-      // close and shutdown connection with remote server
-      while (close(server_fd) < 0) {
-        cerr << endl << "Waiting To Close Connection with Server ..." << endl;
+        clean_up_socket(server_fd);
       }
-      shutdown(server_fd, 2);
+      
+      string cached_response = g_cache[cache_key].response;
   
       // return server response to client
-      while (write(client_fd, response.c_str(), response.length()) < 0) {
+      while (write(client_fd, cached_response.c_str(), cached_response.length()) < 0) {
         cerr << endl << "Waiting To Close Connection with Client ..." << endl;
       }
       current_time = system_clock::now();
@@ -636,9 +719,7 @@ int processClient(int client_fd) {
     }
   } while ((elapsed_time <= TIMEOUT_TIME) && persistent);
   cerr << endl << "Closed Connection with the Server ..." << endl;
-  // close and shutdown connection with client
-  close(client_fd);
-  shutdown(client_fd, 2);
+  clean_up_socket(client_fd);
   return -1;
 }
 
