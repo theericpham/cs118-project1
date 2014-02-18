@@ -1,3 +1,6 @@
+We've implemented a web proxy which accepts HTTP requests, forwards requests to servers, fetches and caches responses, and returns
+responses to clients.
+
 General
 =======
 

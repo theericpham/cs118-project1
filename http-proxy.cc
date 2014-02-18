@@ -420,11 +420,14 @@
 
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/fcntl.h>
 #include <sys/poll.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -472,7 +475,7 @@ typedef struct {
 typedef map<string, CacheEntry> cache;
 typedef time_point<system_clock> timept;
 
-static cache g_cache;
+cache g_cache;
 
 void clean_up_socket(int fd) {
   // close(fd);
@@ -663,7 +666,7 @@ int processClient(int client_fd) {
       }
        
       string cache_key = getCacheKey(client_request);
-      
+      cerr << "Right before update" << endl;
       // replace cached response if it's expired
       if (needsUpdate(cache_key)) {
         cerr << endl << "Entry " << cache_key << " will be updated" << endl; 
@@ -765,7 +768,7 @@ int createListenSocket() {
   return sockfd;
 }
 
-int main (int argc, char *argv[]) {
+int main (int argc, char *argv[]) {  
   // create listen socket
 	int sockfd = createListenSocket();
   
@@ -809,5 +812,6 @@ int main (int argc, char *argv[]) {
     // then we should wait for any process to 
     // finish before continuing
   }
+  shm_unlink("cache");
   return 0;
 }
