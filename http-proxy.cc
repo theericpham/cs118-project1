@@ -420,6 +420,7 @@
 
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 #include <iostream>
+#include <sstream>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/fcntl.h>
@@ -451,6 +452,7 @@ const int TIMEOUT_TIME            = 3 * 1000; // milliseconds
 const int POLL_TIMEOUT            = 1 * 60 * 1000; // milliseconds
 const int MAX_ATTEMPTS            = 3;
 const string DONT_CACHE           = "-1";
+const char TIME_FORMAT[] = "%a, %d %b %Y %H:%M:%S %Z"; // rfc 1123
 
 const char* PORT_PROXY_LISTEN     = "14886";
 const short PORT_SERVER_DEFAULT   = 80;
@@ -503,7 +505,7 @@ timept timept_from_string(const string& time_string) {
   return system_clock::from_time_t(tt); //Finally return a time_point object
 }
 
-string string_from_timept(const timept& time_tpt) {
+string string_from_timept(timept& time_tpt) {
 	ostringstream os;
 	time_t time_tt = system_clock::to_time_t(time_tpt);
 	os << put_time(localtime(&time_tt), TIME_FORMAT);
@@ -690,7 +692,7 @@ int processClient(int client_fd) {
   
   		//Ask the server if the requested page was modified since we cached it
   		timept cached_tpt = g_cache[cache_key].timestamp;
-  		string cached_string = timept_to_string(cached_tpt);
+  		string cached_string = string_from_timept(cached_tpt);
   		client_request.AddHeader("If-Modified-Since", cached_string);
         // foward client request to remote server
         len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
