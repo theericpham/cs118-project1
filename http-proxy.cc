@@ -503,6 +503,13 @@ timept timept_from_string(const string& time_string) {
   return system_clock::from_time_t(tt); //Finally return a time_point object
 }
 
+string string_from_timept(const timept& time_tpt) {
+	ostringstream os;
+	time_t time_tt = system_clock::to_time_t(time_tpt);
+	os << put_time(localtime(&time_tt), TIME_FORMAT);
+	return os.str();
+}
+
 // return the expire time from response header
 timept extractExpireTime(HttpResponse& response) {
   string exptime_string = response.FindHeader("Expires");
@@ -681,6 +688,10 @@ int processClient(int client_fd) {
         int server_fd = createRemoteSocket(remote_server_host, remote_server_port);
         fcntl(server_fd, F_SETFL, O_NONBLOCK);
   
+  		//Ask the server if the requested page was modified since we cached it
+  		timept cached_tpt = g_cache[cache_key].timestamp;
+  		string cached_string = timept_to_string(cached_tpt);
+  		client_request.AddHeader("If-Modified-Since", cached_string);
         // foward client request to remote server
         len = write(server_fd, proxy_request_buffer, client_request.GetTotalLength());
         cerr << endl << "Proxy Sent " << len << " Byte Request To Remote Server." << endl;
