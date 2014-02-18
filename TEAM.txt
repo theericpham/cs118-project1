@@ -1,0 +1,14 @@
+Team Member 1:
+Name: Eric Pham
+UID: 303 787 024
+Contributions: 
+  reading/writing to client/server sockets
+  parsing/validating requests/responses
+  
+Team Member 2:
+Name: Caleb Turner
+UID: 603 816 223
+Contributions: 
+  initializing proxy socket
+  opening/closing client/server sockets
+  caching server responses

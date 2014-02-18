@@ -84,6 +84,10 @@ class ClientThread (Thread):
             conn.request("GET", self.url)
             resp = conn.getresponse()
             rdata = resp.read()
+            
+            # print resp
+            # print rdata
+            # print cdata
 
             if rdata == cdata:
                 self.result = True
@@ -213,6 +217,11 @@ client6 = ClientThread("127.0.0.1:" + pport, "http://127.0.0.1:"+sport1+"/cacheT
 client6.start()
 client6.join()
 r = False
+print "client5 data"
+print client5.data
+print ""
+print "client6 data"
+print client6.data
 if client5.data == client6.data and client5.data != "":
     r = True
 if r:
