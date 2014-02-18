@@ -534,7 +534,7 @@ bool needsUpdate(const string& cache_key) {
   bool in_cache =  iter != g_cache.end();
   cerr << endl << cache_key << " is in cache: " << in_cache << endl;
   if (in_cache)
-    cerr << endl << cache_key << " expires on:  " << iter->second.expires; << endl;
+    cerr << endl << cache_key << " expires on:  " << string_from_timept(iter->second.expires) << endl;
   return !in_cache || now > iter->second.expires; //True if not found or expires before now
 }
 
