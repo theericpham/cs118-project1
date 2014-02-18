@@ -525,6 +525,9 @@ bool needsUpdate(const string& cache_key) {
   //If a cache entry exists
   cache::iterator iter = g_cache.find(cache_key);
   bool in_cache =  iter != g_cache.end();
+  cerr << endl << cache_key << " is in cache: " << in_cache << endl;
+  if (in_cache)
+    cerr << endl << cache_key << " expires on:  " << iter->second.expires; << endl;
   return !in_cache || now > iter->second.expires; //True if not found or expires before now
 }
 
@@ -562,12 +565,12 @@ string readClientRequest(int client_fd) {
   
   // append buffer contents to the string until we timeout or find end of request
   do {
-    cerr << endl << "Waiting To Read From Client" << endl;
+    // cerr << endl << "Waiting To Read From Client" << endl;
     memset(&client_request_buffer, 0, sizeof client_request_buffer);
     if ((rv = poll(&ufds, 1, POLL_TIMEOUT) > 0) && 
       (len = read(client_fd, client_request_buffer, sizeof client_request_buffer) > 0))
       request.append(client_request_buffer);
-    cerr << endl << "Finished Read From Client" << endl;
+    // cerr << endl << "Finished Read From Client" << endl;
   } while ((rv != 0) && (memmem(request.c_str(), request.length(), "\r\n\r\n", 4) == NULL));
   
   return request;
@@ -654,7 +657,7 @@ int processClient(int client_fd) {
       
       // replace cached response if it's expired
       if (needsUpdate(cache_key)) {
-        cerr << endl << "ENTR"
+        cerr << endl << "Entry " << cache_key << " will be updated" << endl; 
         // format proxy request to send to remote server
         int size = client_request.GetTotalLength();
         char proxy_request_buffer[size];
@@ -665,12 +668,6 @@ int processClient(int client_fd) {
           cerr << endl << "Proxy Request Contains \\r\\n" << endl;
         else
           cerr << endl << "Proxy Request Missing \\r\\n" << endl;
-  
-        cerr << endl << endl;
-        cerr << endl << "String Request Length: " << request.length() << " bytes" << endl;
-        cerr << endl << "Client Request Length: " << client_request.GetTotalLength() << " bytes" << endl;
-        cerr << endl << "Proxy Request Length:  " << sizeof proxy_request_buffer << " bytes" << endl;
-        cerr << endl << endl;
   
         // find host and port to connect to
         string remote_server_host;
@@ -696,6 +693,7 @@ int processClient(int client_fd) {
         } catch (ParseException e) {
           cerr << endl << "Error Parsing Server Response:" << endl << e.what() << endl;
         }
+        cerr << endl << "Finished Reading Server Response:" << endl << response << endl;
         
         // mark time of cache and expire
         timept now = system_clock::now(); 
@@ -703,7 +701,8 @@ int processClient(int client_fd) {
         CacheEntry new_entry = {response, now, exptime};
         g_cache[cache_key] = new_entry;  // cache fresh server response
         
-        cerr << endl << "Finished Reading Server Response:" << endl << response << endl;
+        cerr << endl << "Inserted new copy for " << cache_key << ": " << endl;
+        cerr << g_cache[cache_key].response << endl;      
   
         clean_up_socket(server_fd);
       }
