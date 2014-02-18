@@ -1,5 +1,31 @@
 We've implemented a web proxy which accepts HTTP requests, forwards requests to servers, fetches and caches responses, and returns
-responses to clients.
+responses to clients.  The proxy only supports GET requests which use an absoluteURI; otherwise, the proxy will return an error
+response.
+
+THe proxy listens on port 14886 as outlined, and forks a new child process to handle a new connection (up to 20 at once).  If more
+than 20 clients attempt to connect, the first 20 will be served while the remainder will be put on hold until the backlog clears.
+
+If the client submits a valid request, the proxy will parse and validate it before forwarding it to the remote server.  At this point,
+we also check the whether the client is using a persistent connection so we can determine whether to close or keep the connection
+alive for a timeout period (3 seconds) after processing the request.
+
+Once the request has been parsed, we first check the cache for a fresh copy of the response.  We implemented the cache using a mapping
+from the string representation of the full request URI to a struct which encapsulates a response with contents, modified, and expiration
+times.  If the copy is fresh, we return the cached copy.  Otherwise, we connect to the remote server, fetch a new copy and cache it while
+returning it to the client.
+
+When we fetch a response from a server, we use a sleep timer so the server can put enough data on the file descriptor in time for the 
+proxy to read.  We tried to use a polling strategy as we did when reading client requests, but the proxy would hang when reading from
+the server.  Therefore, we resorted to the sleep timer.  We were cautious with this strategy since we were worried it would affect the
+results from caching.
+
+Finally, once we have the response from cache, we write it back to the client.  When we finish writing, we will close our connection with 
+the client if the connection is non-persistent, or keep the connection alive for a period of at least 3 seconds if the connection is 
+persistent to allow the client a window to make additional requests.
+
+Unforunately, our cache was not shared by all processes, so we can't guarantee correctness; we declared a global static cache, but each 
+process created its own copy of the cache.  We attempted to make cache a global object by using Boost shared memory, but this caused the 
+proxy to hang when accessing the cache and we ran short on time so we could not resolve the issue.
 
 General
 =======
