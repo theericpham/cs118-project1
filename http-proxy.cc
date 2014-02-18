@@ -420,6 +420,7 @@
 
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -663,7 +664,6 @@ int processClient(int client_fd) {
       
       // replace cached response if it's expired
       if (needsUpdate(cache_key)) {
-        cerr << endl << "ENTR"
         // format proxy request to send to remote server
         int size = client_request.GetTotalLength();
         char proxy_request_buffer[size];
